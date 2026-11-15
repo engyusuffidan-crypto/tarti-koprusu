@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tartı Köprüsü</title>
+<style>
+  :root { --bg:#f6f7f9; --kart:#fff; --yazi:#16181d; --soluk:#6b7280; --vurgu:#0a7d5a; --hata:#b42318; --cizgi:#e5e7eb; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --kart:#181b21; --yazi:#e8eaee; --soluk:#9aa1ad; --vurgu:#3ccf9a; --hata:#ff7a6e; --cizgi:#2a2f38; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--yazi); font:16px/1.45 -apple-system, system-ui, sans-serif; padding:16px; max-width:560px; margin-inline:auto; }
+  h1 { font-size:22px; margin:4px 0 2px; }
+  .alt { color:var(--soluk); font-size:14px; margin:0 0 16px; }
+  .kart { background:var(--kart); border:1px solid var(--cizgi); border-radius:14px; padding:14px; margin-bottom:12px; }
+  button { width:100%; font-size:18px; font-weight:600; padding:14px; border:0; border-radius:12px; background:var(--vurgu); color:#fff; }
+  button:disabled { opacity:.5; }
+  button.ikincil { background:transparent; color:var(--vurgu); border:1px solid var(--vurgu); font-size:15px; padding:10px; margin-top:8px; }
+  label { display:block; font-size:13px; color:var(--soluk); margin-top:8px; }
+  input, select { width:100%; font-size:16px; padding:9px; border:1px solid var(--cizgi); border-radius:8px; background:var(--bg); color:var(--yazi); }
+  .izgara { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; }
+  .deger { font-size:26px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .etiket { font-size:12px; color:var(--soluk); }
+  #gunluk { font:12px/1.4 ui-monospace, monospace; white-space:pre-wrap; color:var(--soluk); max-height:220px; overflow:auto; }
+  .hata { color:var(--hata); }
+  details summary { cursor:pointer; color:var(--soluk); font-size:14px; }
+</style>
+</head>
+<body>
+<h1>Tartı Köprüsü</h1>
+<p class="alt">Mi Body Composition Scale 2 → Google E-Tablo. Önce tartıya çık, sonra düğmeye bas.</p>
+
+<div class="kart">
+  <button id="al">Ölçümleri al ve yükle</button>
+  <p id="durum" class="alt" style="margin:10px 0 0">Hazır.</p>
+</div>
+
+<div class="kart" id="sonuc" hidden>
+  <div class="etiket" id="sonZaman"></div>
+  <div class="izgara" id="sonDegerler" style="margin-top:8px"></div>
+</div>
+
+<div class="kart">
+  <details id="ayarKutusu">
+    <summary>Ayarlar</summary>
+    <label>Apps Script web uygulaması adresi</label><input id="url" placeholder="https://script.google.com/macros/s/.../exec">
+    <label>Gizli anahtar (TOKEN)</label><input id="token" type="password">
+    <div class="izgara">
+      <div><label>Cinsiyet</label><select id="cins"><option value="1">Erkek</option><option value="0">Kadın</option></select></div>
+      <div><label>Boy (cm)</label><input id="boy" type="number" inputmode="decimal"></div>
+      <div><label>Doğum yılı</label><input id="dogum" type="number" inputmode="numeric"></div>
+    </div>
+    <button class="ikincil" id="kaydet">Ayarları kaydet</button>
+  </details>
+</div>
+
+<div class="kart"><div class="etiket">Günlük (ham paketler dahil)</div><div id="gunluk"></div></div>
+
+<script>
+// ---------- Ayarlar (yalnizca bu telefonda, tarayici deposunda) ----------
+const A = ['url', 'token', 'cins', 'boy', 'dogum'];
+function depo(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+A.forEach(k => { const v = depo('tk_' + k); if (v !== null) document.getElementById(k).value = v; });
+if (!depo('tk_url')) document.getElementById('ayarKutusu').open = true;
+document.getElementById('kaydet').onclick = () => { A.forEach(k => depo('tk_' + k, document.getElementById(k).value.trim())); log('Ayarlar kaydedildi.'); };
+let uniq = parseInt(depo('tk_uniq') || '0', 10);
+if (!uniq) { uniq = 1 + Math.floor(Math.random() * 65000); depo('tk_uniq', String(uniq)); }
+
+const $ = id => document.getElementById(id);
+function log(m, hata) { const s = new Date().toTimeString().slice(0, 8) + '  ' + m + '\n'; const g = $('gunluk'); g.textContent = s + g.textContent; if (hata) $('durum').innerHTML = '<span class="hata">' + m + '</span>'; }
+function durum(m) { $('durum').textContent = m; }
+const hex = b => Array.from(new Uint8Array(b.buffer ? b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) : b)).map(x => x.toString(16).padStart(2, '0')).join('');
+
+// ---------- Mi Scale 2 cercevesi (13 bayt) ----------
+function coz13(d) {
+  const k0 = d[0], k1 = d[1];
+  const lb = !!(k0 & 0x01), catty = !!(k1 & 0x40);
+  const ham = d[11] | (d[12] << 8);
+  const kilo = lb ? ham / 100 * 0.45359237 : catty ? ham / 100 * 0.5 : ham / 200;
+  const emp = d[9] | (d[10] << 8);
+  const yil = d[2] | (d[3] << 8);
+  const p = n => String(n).padStart(2, '0');
+  return {
+    kilo_kg: Math.round(kilo * 100) / 100,
+    empedans_ohm: (k1 & 0x02) && emp > 0 && emp < 3000 ? emp : null,
+    sabit: !!(k1 & 0x20), indi: !!(k1 & 0x80),
+    tarti_zamani: `${yil}-${p(d[4])}-${p(d[5])}T${p(d[6])}:${p(d[7])}:${p(d[8])}`,
+    ham_hex: hex(d),
+  };
+}
+
+// ---------- Vucut kompozisyonu: openScale MiScaleLib (GPL-3.0) aktarimi ----------
+function vucut(erkek, yas, boy, w, imp) {
+  const lbmK = () => (boy * 9.058 / 100) * (boy / 100) + w * 0.32 + 12.226 - imp * 0.0068 - yas * 0.0542;
+  let sub = 0.8; if (!erkek) sub = yas <= 49 ? 9.25 : 7.25;
+  let c = 1.0;
+  if (erkek && w < 61) c = 0.98;
+  else if (!erkek && w > 60) c = 0.96 * (boy > 160 ? 1.03 : 1);
+  else if (!erkek && w < 50) c = 1.02 * (boy > 160 ? 1.03 : 1);
+  let yag = (1 - ((lbmK() - sub) * c) / w) * 100; if (yag > 63) yag = 75;
+  let kemik = ((erkek ? 0.18016894 : 0.245691014) - lbmK() * 0.05158) * -1;
+  kemik = kemik > 2.2 ? kemik + 0.1 : kemik - 0.1; if (kemik > (erkek ? 5.2 : 5.1)) kemik = 8;
+  let lbm = w - yag * 0.01 * w - kemik; if (lbm >= (erkek ? 93.5 : 84)) lbm = 120;
+  const smm = 0.401 * (boy * boy / imp) + 3.825 * (erkek ? 1 : 0) - 0.071 * yas + 5.102;
+  const kas = Math.min(60, Math.max(10, smm / w * 100));
+  let su = (100 - yag) * 0.7; su *= su < 50 ? 1.02 : 0.98;
+  let vis;
+  if (erkek) {
+    if (boy < w * 1.6) vis = (w * 305) / (((boy * 0.4) - (boy * (boy * 0.0826))) * -1 + 48) - 2.9 + yas * 0.15;
+    else { const s = 0.765 + boy * -0.0015; vis = ((boy * 0.143) - (w * s)) * -1 + yas * 0.15 - 5; }
+  } else {
+    if (w > (13 - boy * 0.5) * -1) vis = (w * 500 / (((boy * 1.45) + (boy * 0.1158) * boy) - 120) - 6) + yas * 0.07;
+    else { const s = 0.691 + boy * -0.0024 + boy * -0.0024; vis = ((boy * 0.027) - (s * w)) * -1 + yas * 0.07 - yas; }
+  }
+  const r1 = x => Math.round(x * 10) / 10;
+  return { bmi: r1(w / (boy / 100) ** 2), yag_yuzde: r1(yag), yag_kg: r1(w * yag / 100), yagsiz_kg: r1(lbm),
+           kemik_kg: Math.round(kemik * 100) / 100, iskelet_kasi_yuzde: r1(kas), iskelet_kasi_kg: r1(w * kas / 100),
+           su_yuzde: r1(su), viseral_yag: r1(vis) };
+}
+
+// ---------- BLE ----------
+const S_BODY = 0x181b, S_WEIGHT = 0x181d;
+const C_TIME = 0x2a2b;
+const C_HIST = '00002a2f-0000-3512-2118-0009af100700';
+const S_CFG = '00001530-0000-3512-2118-0009af100700';
+const MAGIC = [0x01, 0x96, 0x8a, 0xbd, 0x62];
+const bekle = ms => new Promise(r => setTimeout(r, ms));
+async function yaz(ch, bayt) { const v = new Uint8Array(bayt); if (ch.writeValueWithResponse) return ch.writeValueWithResponse(v); return ch.writeValue(v); }
+
+async function calis() {
+  const ayar = Object.fromEntries(A.map(k => [k, ($(k).value || '').trim()]));
+  if (!ayar.url || !ayar.token || !ayar.boy || !ayar.dogum) { $('ayarKutusu').open = true; return log('Önce ayarları doldurup kaydet.', true); }
+  if (!navigator.bluetooth) return log('Bu tarayıcıda Bluetooth yok. Sayfayı Bluefy ile aç.', true);
+  $('al').disabled = true;
+  let cihaz;
+  try {
+    durum('Tartı aranıyor… listeden MIBFS seç.');
+    cihaz = await navigator.bluetooth.requestDevice({ filters: [{ name: 'MIBFS' }], optionalServices: [S_BODY, S_WEIGHT, S_CFG] });
+    durum('Bağlanılıyor…');
+    const gatt = await cihaz.gatt.connect();
+    log('Bağlandı: ' + (cihaz.name || '?'));
+    const svc = await gatt.getPrimaryService(S_BODY);
+
+    // 1) Saat: tartinin ic saatini telefona esitle (gecmis kayitlarin zamani buna bagli)
+    try {
+      const t = new Date(), y = t.getFullYear();
+      const ch = await svc.getCharacteristic(C_TIME);
+      await yaz(ch, [y & 255, y >> 8, t.getMonth() + 1, t.getDate(), t.getHours(), t.getMinutes(), t.getSeconds(), 0, 0, 1]);
+      log('Tartı saati ayarlandı.');
+    } catch (e) { log('Saat yazılamadı (devam): ' + e.message); }
+
+    // 2) Gecmis akisi
+    const hist = await svc.getCharacteristic(C_HIST);
+    const cerceveler = []; let bitti = false;
+    hist.addEventListener('characteristicvaluechanged', ev => {
+      const d = new Uint8Array(ev.target.value.buffer.slice(0));
+      log('<- ' + hex(d));
+      if (d.length === 1 && d[0] === 0x03) { bitti = true; return; }
+      if (d.length >= 6 && d[0] === 0x01) { log('Kayıt sayısı bildirimi: ' + (d.length >= 7 ? (d[1] | d[2] << 8) : d[1])); return; }
+      if (d.length % 13 === 0) { for (let i = 0; i < d.length; i += 13) cerceveler.push(d.slice(i, i + 13)); return; }
+      log('Bilinmeyen uzunluk ' + d.length + ' (ham kaydedildi)');
+      cerceveler.push(d);
+    });
+    await hist.startNotifications();
+    await yaz(hist, MAGIC);
+    await yaz(hist, [0x01, 0xff, 0xff, uniq >> 8, uniq & 255]);
+    await yaz(hist, [0x02]);
+    durum('Ölçümler okunuyor…');
+    for (let i = 0; i < 40 && !bitti; i++) await bekle(500);
+    log(bitti ? 'Aktarım bitti.' : 'Bitiş sinyali gelmedi, gelenlerle devam.');
+
+    // 3) Coz + hesapla
+    const erkek = ayar.cins === '1', boy = parseFloat(ayar.boy);
+    const kayitlar = [];
+    for (const d of cerceveler) {
+      if (d.length !== 13) { kayitlar.push({ anahtar: 'ham:' + hex(d), ham_hex: hex(d), kaynak: 'MIBFS-bilinmeyen' }); continue; }
+      const o = coz13(d);
+      if (!o.sabit || o.indi) continue;
+      const yil = parseInt(o.tarti_zamani.slice(0, 4), 10);
+      const yas = (yil > 2000 ? yil : new Date().getFullYear()) - parseInt(ayar.dogum, 10);
+      const v = o.empedans_ohm ? vucut(erkek, yas, boy, o.kilo_kg, o.empedans_ohm) : {};
+      kayitlar.push({ anahtar: o.ham_hex, tarti_zamani: o.tarti_zamani, kilo_kg: o.kilo_kg, empedans_ohm: o.empedans_ohm ?? '',
+                      ...v, ham_hex: o.ham_hex, kaynak: 'MIBFS-gecmis/Bluefy' });
+    }
+    log(kayitlar.length + ' ölçüm bulundu.');
+    if (!kayitlar.length) { durum('Yeni ölçüm yok.'); return; }
+    goster(kayitlar.filter(k => k.kilo_kg).slice(-1)[0]);
+
+    // 4) Buluta yukle; basariliysa tartiya "aldim" onayi ver (yoksa bir dahakine tekrar gelir)
+    durum('Buluta yükleniyor…');
+    const yanit = await fetch(ayar.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ token: ayar.token, islem: 'yaz', tur: 'tarti', kayitlar }) }).then(r => r.json());
+    if (!yanit.ok) throw new Error('Bulut: ' + yanit.hata);
+    log('Buluta yazıldı: ' + yanit.eklenen + ' yeni / ' + yanit.gelen);
+    try { await yaz(hist, [0x03]); await yaz(hist, [0x04, 0xff, 0xff, uniq >> 8, uniq & 255]); log('Tartıya onay verildi.'); }
+    catch (e) { log('Onay yazılamadı: ' + e.message); }
+    durum('Tamam: ' + yanit.eklenen + ' yeni ölçüm buluta gitti.');
+  } catch (e) {
+    log('Hata: ' + e.message, true);
+  } finally {
+    try { if (cihaz && cihaz.gatt.connected) cihaz.gatt.disconnect(); } catch (e) {}
+    $('al').disabled = false;
+  }
+}
+
+function goster(k) {
+  if (!k) return;
+  $('sonuc').hidden = false;
+  $('sonZaman').textContent = 'Son ölçüm · ' + k.tarti_zamani.replace('T', ' ');
+  const alanlar = [['Kilo', k.kilo_kg, 'kg'], ['Yağ', k.yag_yuzde, '%'], ['İskelet kası', k.iskelet_kasi_kg, 'kg'],
+                   ['Su', k.su_yuzde, '%'], ['Viseral', k.viseral_yag, ''], ['Empedans', k.empedans_ohm, 'Ω']];
+  $('sonDegerler').innerHTML = alanlar.map(([a, v, b]) =>
+    `<div><div class="deger">${v === undefined || v === '' ? '–' : String(v).replace('.', ',')}<small> ${b}</small></div><div class="etiket">${a}</div></div>`).join('');
+}
+
+$('al').onclick = calis;
+</script>
+</body>
+</html>
