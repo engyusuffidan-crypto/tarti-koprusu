@@ -26,7 +26,7 @@
 </style>
 </head>
 <body>
-<h1>Tartı Köprüsü</h1>
+<h1>Tartı Köprüsü <small style="font-size:13px;color:var(--soluk)">sürüm 3</small></h1>
 <p class="alt">Mi Body Composition Scale 2 → Google E-Tablo. Önce tartıya çık, sonra düğmeye bas.</p>
 
 <div class="kart">
@@ -66,6 +66,14 @@ let uniq = parseInt(depo('tk_uniq') || '0', 10);
 if (!uniq) { uniq = 1 + Math.floor(Math.random() * 65000); depo('tk_uniq', String(uniq)); }
 
 const $ = id => document.getElementById(id);
+// Gmail/Google linki sararsa (https://www.google.com/url?q=...) gercek adresi cikar
+function adresTemizle(u) {
+  u = (u || '').trim();
+  try { const x = new URL(u); if (/google\.[a-z.]+$/.test(x.hostname) && x.pathname === '/url' && x.searchParams.get('q')) u = x.searchParams.get('q'); } catch (e) {}
+  return u.trim();
+}
+(() => { const t = adresTemizle($('url').value); if (t !== $('url').value) { $('url').value = t; depo('tk_url', t); } })();
+$('url').addEventListener('change', () => { $('url').value = adresTemizle($('url').value); });
 function log(m, hata) { const s = new Date().toTimeString().slice(0, 8) + '  ' + m + '\n'; const g = $('gunluk'); g.textContent = s + g.textContent; if (hata) $('durum').innerHTML = '<span class="hata">' + m + '</span>'; }
 function durum(m) { $('durum').textContent = m; }
 let adim = '-';
@@ -130,6 +138,9 @@ async function yaz(ch, bayt) { const v = new Uint8Array(bayt); if (ch.writeValue
 
 async function calis() {
   const ayar = Object.fromEntries(A.map(k => [k, ($(k).value || '').trim()]));
+  ayar.url = adresTemizle(ayar.url);
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(ayar.url)) { $('ayarKutusu').open = true; return log('Adres hatalı: https://script.google.com/macros/s/.../exec biçiminde olmalı.', true); }
+  log('Sürüm 3 · adres tamam.');
   if (!ayar.url || !ayar.token || !ayar.boy || !ayar.dogum) { $('ayarKutusu').open = true; return log('Önce ayarları doldurup kaydet.', true); }
   if (!navigator.bluetooth) return log('Bu tarayıcıda Bluetooth yok. Sayfayı Bluefy ile aç.', true);
   $('al').disabled = true;
