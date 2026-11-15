@@ -26,7 +26,7 @@
 </style>
 </head>
 <body>
-<h1>Tartı Köprüsü <small style="font-size:13px;color:var(--soluk)">sürüm 6</small></h1>
+<h1>Tartı Köprüsü <small style="font-size:13px;color:var(--soluk)">sürüm 7</small></h1>
 <p class="alt">Mi Body Composition Scale 2 → Google E-Tablo.</p>
 
 <div class="kart">
@@ -130,8 +130,9 @@ function vucut(erkek, yas, boy, w, imp) {
 }
 
 // ---------- BLE ----------
-const S_BODY = 0x181b, S_WEIGHT = 0x181d;
-const C_TIME = 0x2a2b;
+// Bluefy sayisal UUID'leri ayristiramiyor ("Request payload could not be parsed"): hepsi uzun metin bicimi
+const S_BODY = '0000181b-0000-1000-8000-00805f9b34fb', S_WEIGHT = '0000181d-0000-1000-8000-00805f9b34fb';
+const C_TIME = '00002a2b-0000-1000-8000-00805f9b34fb';
 const C_HIST = '00002a2f-0000-3512-2118-0009af100700';
 const S_CFG = '00001530-0000-3512-2118-0009af100700';
 const MAGIC = [0x01, 0x96, 0x8a, 0xbd, 0x62];
@@ -259,7 +260,7 @@ const destek = {
   requestLEScan: !!(navigator.bluetooth && navigator.bluetooth.requestLEScan),
   watchAdvertisements: !!(window.BluetoothDevice && window.BluetoothDevice.prototype && window.BluetoothDevice.prototype.watchAdvertisements),
 };
-log('Sürüm 6 · destek: ' + Object.entries(destek).map(([k, v]) => k + (v ? '✓' : '✗')).join(' '));
+log('Sürüm 7 · destek: ' + Object.entries(destek).map(([k, v]) => k + (v ? '✓' : '✗')).join(' '));
 
 // Daha once secilen tarti sayfa acilirken arka planda aranir. requestDevice'tan ONCE await olmamali:
 // iOS dokunma iznini dusurur ve Bluefy listeyi acmadan reddeder (hata "2").
