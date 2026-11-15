@@ -26,11 +26,13 @@
 </style>
 </head>
 <body>
-<h1>Tartı Köprüsü <small style="font-size:13px;color:var(--soluk)">sürüm 3</small></h1>
-<p class="alt">Mi Body Composition Scale 2 → Google E-Tablo. Önce tartıya çık, sonra düğmeye bas.</p>
+<h1>Tartı Köprüsü <small style="font-size:13px;color:var(--soluk)">sürüm 4</small></h1>
+<p class="alt">Mi Body Composition Scale 2 → Google E-Tablo.</p>
 
 <div class="kart">
-  <button id="al">Ölçümleri al ve yükle</button>
+  <button id="dinle">Canlı dinle (önerilen)</button>
+  <p class="alt" style="margin:8px 0 12px">Bas, sonra tartıya çık. Ölçüm bitince otomatik buluta gider.</p>
+  <button id="al" class="ikincil">Tartı hafızasını oku (bağlanarak)</button>
   <p id="durum" class="alt" style="margin:10px 0 0">Hazır.</p>
 </div>
 
@@ -237,6 +239,70 @@ function goster(k) {
 }
 
 $('al').onclick = calis;
+
+// ---------- Canli dinleme: baglanmadan yayini (Service Data 0x181B) yakala ----------
+function ayarlariAl() {
+  const ayar = Object.fromEntries(A.map(k => [k, ($(k).value || '').trim()]));
+  ayar.url = adresTemizle(ayar.url);
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(ayar.url)) { $('ayarKutusu').open = true; log('Adres hatalı: https://script.google.com/macros/s/.../exec biçiminde olmalı.', true); return null; }
+  if (!ayar.token || !ayar.boy || !ayar.dogum) { $('ayarKutusu').open = true; log('Önce ayarları doldurup kaydet.', true); return null; }
+  return ayar;
+}
+
+async function yukle(ayar, kayitlar) {
+  return fetch(ayar.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ token: ayar.token, islem: 'yaz', tur: 'tarti', kayitlar }) }).then(r => r.json());
+}
+
+let tarama = null;
+async function dinle() {
+  const ayar = ayarlariAl(); if (!ayar) return;
+  if (!navigator.bluetooth) return log('Bu tarayıcıda Bluetooth yok. Sayfayı Bluefy ile aç.', true);
+  if (tarama) { try { tarama.stop(); } catch (e) {} tarama = null; $('dinle').textContent = 'Canlı dinle (önerilen)'; durum('Dinleme durduruldu.'); return; }
+  if (!navigator.bluetooth.requestLEScan) return log('Bu tarayıcı yayın dinlemeyi (requestLEScan) desteklemiyor.', true);
+  adim = 'tarama baslatma';
+  const gonderilen = new Set();
+  let sonHam = '';
+  navigator.bluetooth.addEventListener('advertisementreceived', async ev => {
+    if (!tarama) return;
+    let dv = null;
+    ev.serviceData && ev.serviceData.forEach((v, k) => { if (String(k).toLowerCase().indexOf('181b') >= 0) dv = v; });
+    if (!dv) return;
+    const d = new Uint8Array(dv.buffer.slice(dv.byteOffset, dv.byteOffset + dv.byteLength));
+    if (d.length !== 13) { log('Yayın (13 bayt değil): ' + hex(d)); return; }
+    const h = hex(d);
+    if (h === sonHam) return; sonHam = h;
+    const o = coz13(d);
+    durum('Tartı: ' + String(o.kilo_kg).replace('.', ',') + ' kg' + (o.empedans_ohm ? ' · empedans ' + o.empedans_ohm + ' Ω' : '') + (o.sabit ? ' · sabit' : ' · ölçülüyor'));
+    log('<- ' + h + (o.sabit ? ' sabit' : '') + (o.indi ? ' indi' : '') + (o.empedans_ohm ? ' emp' : ''));
+    // Kayit: sabitlenmis ve empedansli paket (yoksa inis paketi). Ayni olcum bir kez gonderilir.
+    if (!o.sabit || !(o.empedans_ohm || o.indi)) return;
+    const anahtar = o.kilo_kg + '|' + (o.empedans_ohm || '') + '|' + new Date().toISOString().slice(0, 15);
+    if (gonderilen.has(anahtar)) return; gonderilen.add(anahtar);
+    const simdi = new Date(), p = n => String(n).padStart(2, '0');
+    const zaman = `${simdi.getFullYear()}-${p(simdi.getMonth() + 1)}-${p(simdi.getDate())}T${p(simdi.getHours())}:${p(simdi.getMinutes())}:${p(simdi.getSeconds())}`;
+    const yas = simdi.getFullYear() - parseInt(ayar.dogum, 10);
+    const v = o.empedans_ohm ? vucut(ayar.cins === '1', yas, parseFloat(ayar.boy), o.kilo_kg, o.empedans_ohm) : {};
+    const kayit = { anahtar: zaman.slice(0, 16) + '|' + h, tarti_zamani: zaman, kilo_kg: o.kilo_kg, empedans_ohm: o.empedans_ohm ?? '',
+                    ...v, ham_hex: h, kaynak: 'MIBFS-yayin/Bluefy' };
+    goster(kayit);
+    try {
+      adim = 'bulut yukleme';
+      const y = await yukle(ayar, [kayit]);
+      if (!y.ok) throw new Error('Bulut: ' + y.hata);
+      log('Buluta yazıldı: ' + y.eklenen + ' yeni');
+      durum('Tamam: ' + String(o.kilo_kg).replace('.', ',') + ' kg buluta gitti.' + (o.empedans_ohm ? '' : ' (empedans yok: çıplak ayakla tartıl)'));
+    } catch (e) { gonderilen.delete(anahtar); log('Hata [' + adim + ']: ' + hataMetni(e), true); }
+  });
+  try {
+    try { tarama = await navigator.bluetooth.requestLEScan({ filters: [{ name: 'MIBFS' }], keepRepeatedDevices: true }); }
+    catch (e1) { log('İsim filtresiyle tarama açılamadı (' + hataMetni(e1) + '), tüm yayınlar deneniyor.'); tarama = await navigator.bluetooth.requestLEScan({ acceptAllAdvertisements: true, keepRepeatedDevices: true }); }
+    $('dinle').textContent = 'Dinlemeyi durdur';
+    durum('Dinleniyor… şimdi tartıya çık (çıplak ayak).');
+    log('Sürüm 4 · tarama açık.');
+  } catch (e) { tarama = null; log('Hata [' + adim + ']: ' + hataMetni(e), true); }
+}
+$('dinle').onclick = dinle;
 </script>
 </body>
 </html>
