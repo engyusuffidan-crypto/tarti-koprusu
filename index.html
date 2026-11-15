@@ -68,6 +68,8 @@ if (!uniq) { uniq = 1 + Math.floor(Math.random() * 65000); depo('tk_uniq', Strin
 const $ = id => document.getElementById(id);
 function log(m, hata) { const s = new Date().toTimeString().slice(0, 8) + '  ' + m + '\n'; const g = $('gunluk'); g.textContent = s + g.textContent; if (hata) $('durum').innerHTML = '<span class="hata">' + m + '</span>'; }
 function durum(m) { $('durum').textContent = m; }
+let adim = '-';
+function hataMetni(e) { if (!e) return 'bos hata'; if (typeof e === 'string') return e; const p = [e.name, e.message, e.code].filter(x => x !== undefined && x !== ''); if (p.length) return p.join(' / '); try { return JSON.stringify(e); } catch (x) { return String(e); } }
 const hex = b => Array.from(new Uint8Array(b.buffer ? b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) : b)).map(x => x.toString(16).padStart(2, '0')).join('');
 
 // ---------- Mi Scale 2 cercevesi (13 bayt) ----------
@@ -134,11 +136,15 @@ async function calis() {
   let cihaz;
   try {
     durum('Tartı aranıyor… listeden MIBFS seç.');
+    adim = 'cihaz secimi';
     cihaz = await navigator.bluetooth.requestDevice({ filters: [{ name: 'MIBFS' }], optionalServices: [S_BODY, S_WEIGHT, S_CFG] });
     durum('Bağlanılıyor…');
+    adim = 'baglanti';
     const gatt = await cihaz.gatt.connect();
     log('Bağlandı: ' + (cihaz.name || '?'));
+    adim = 'servis 181b';
     const svc = await gatt.getPrimaryService(S_BODY);
+    log('Servis bulundu.');
 
     // 1) Saat: tartinin ic saatini telefona esitle (gecmis kayitlarin zamani buna bagli)
     try {
@@ -146,10 +152,12 @@ async function calis() {
       const ch = await svc.getCharacteristic(C_TIME);
       await yaz(ch, [y & 255, y >> 8, t.getMonth() + 1, t.getDate(), t.getHours(), t.getMinutes(), t.getSeconds(), 0, 0, 1]);
       log('Tartı saati ayarlandı.');
-    } catch (e) { log('Saat yazılamadı (devam): ' + e.message); }
+    } catch (e) { log('Saat yazılamadı (devam): ' + hataMetni(e)); }
 
     // 2) Gecmis akisi
+    adim = 'gecmis karakteristigi';
     const hist = await svc.getCharacteristic(C_HIST);
+    log('Geçmiş karakteristiği bulundu.');
     const cerceveler = []; let bitti = false;
     hist.addEventListener('characteristicvaluechanged', ev => {
       const d = new Uint8Array(ev.target.value.buffer.slice(0));
@@ -160,10 +168,14 @@ async function calis() {
       log('Bilinmeyen uzunluk ' + d.length + ' (ham kaydedildi)');
       cerceveler.push(d);
     });
+    adim = 'bildirim acma';
     await hist.startNotifications();
+    adim = 'komut yazma';
     await yaz(hist, MAGIC);
     await yaz(hist, [0x01, 0xff, 0xff, uniq >> 8, uniq & 255]);
     await yaz(hist, [0x02]);
+    log('Komutlar gönderildi.');
+    adim = 'veri bekleme';
     durum('Ölçümler okunuyor…');
     for (let i = 0; i < 40 && !bitti; i++) await bekle(500);
     log(bitti ? 'Aktarım bitti.' : 'Bitiş sinyali gelmedi, gelenlerle devam.');
@@ -187,15 +199,16 @@ async function calis() {
 
     // 4) Buluta yukle; basariliysa tartiya "aldim" onayi ver (yoksa bir dahakine tekrar gelir)
     durum('Buluta yükleniyor…');
+    adim = 'bulut yukleme';
     const yanit = await fetch(ayar.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ token: ayar.token, islem: 'yaz', tur: 'tarti', kayitlar }) }).then(r => r.json());
     if (!yanit.ok) throw new Error('Bulut: ' + yanit.hata);
     log('Buluta yazıldı: ' + yanit.eklenen + ' yeni / ' + yanit.gelen);
     try { await yaz(hist, [0x03]); await yaz(hist, [0x04, 0xff, 0xff, uniq >> 8, uniq & 255]); log('Tartıya onay verildi.'); }
-    catch (e) { log('Onay yazılamadı: ' + e.message); }
+    catch (e) { log('Onay yazılamadı: ' + hataMetni(e)); }
     durum('Tamam: ' + yanit.eklenen + ' yeni ölçüm buluta gitti.');
   } catch (e) {
-    log('Hata: ' + e.message, true);
+    log('Hata [' + adim + ']: ' + hataMetni(e), true);
   } finally {
     try { if (cihaz && cihaz.gatt.connected) cihaz.gatt.disconnect(); } catch (e) {}
     $('al').disabled = false;
