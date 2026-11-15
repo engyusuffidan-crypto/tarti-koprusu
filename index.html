@@ -26,7 +26,7 @@
 </style>
 </head>
 <body>
-<h1>Tartı Köprüsü <small style="font-size:13px;color:var(--soluk)">sürüm 5</small></h1>
+<h1>Tartı Köprüsü <small style="font-size:13px;color:var(--soluk)">sürüm 6</small></h1>
 <p class="alt">Mi Body Composition Scale 2 → Google E-Tablo.</p>
 
 <div class="kart">
@@ -259,17 +259,21 @@ const destek = {
   requestLEScan: !!(navigator.bluetooth && navigator.bluetooth.requestLEScan),
   watchAdvertisements: !!(window.BluetoothDevice && window.BluetoothDevice.prototype && window.BluetoothDevice.prototype.watchAdvertisements),
 };
-log('Sürüm 5 · destek: ' + Object.entries(destek).map(([k, v]) => k + (v ? '✓' : '✗')).join(' '));
+log('Sürüm 6 · destek: ' + Object.entries(destek).map(([k, v]) => k + (v ? '✓' : '✗')).join(' '));
 
-async function tartiCihazi() {
-  // Daha once secildiyse listeyi acmadan kullan
-  if (destek.getDevices) {
-    try { const l = await navigator.bluetooth.getDevices(); const d = l.find(x => (x.name || '') === 'MIBFS'); if (d) { log('Kayıtlı tartı bulundu, liste açılmadı.'); return d; } }
-    catch (e) { log('getDevices: ' + hataMetni(e)); }
-  }
+// Daha once secilen tarti sayfa acilirken arka planda aranir. requestDevice'tan ONCE await olmamali:
+// iOS dokunma iznini dusurur ve Bluefy listeyi acmadan reddeder (hata "2").
+let kayitliCihaz = null;
+if (destek.getDevices) {
+  navigator.bluetooth.getDevices().then(l => { kayitliCihaz = l.find(x => (x.name || '') === 'MIBFS') || null; if (kayitliCihaz) log('Kayıtlı tartı hazır, liste açılmayacak.'); })
+    .catch(e => log('getDevices: ' + hataMetni(e)));
+}
+function tartiCihazi() {
+  if (kayitliCihaz) return Promise.resolve(kayitliCihaz);
   durum('Listede MIBFS belirdiği an dokun (tartının üzerinde dur).');
   adim = 'cihaz secimi';
-  return navigator.bluetooth.requestDevice({ filters: [{ name: 'MIBFS' }], optionalServices: [S_BODY, S_WEIGHT, S_CFG] });
+  return navigator.bluetooth.requestDevice({ filters: [{ name: 'MIBFS' }], optionalServices: [S_BODY, S_WEIGHT, S_CFG] })
+    .then(d => { kayitliCihaz = d; return d; });
 }
 
 async function dinle() {
