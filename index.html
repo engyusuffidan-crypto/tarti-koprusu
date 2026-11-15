@@ -26,7 +26,7 @@
 </style>
 </head>
 <body>
-<h1>Tartı Köprüsü <small style="font-size:13px;color:var(--soluk)">sürüm 4</small></h1>
+<h1>Tartı Köprüsü <small style="font-size:13px;color:var(--soluk)">sürüm 5</small></h1>
 <p class="alt">Mi Body Composition Scale 2 → Google E-Tablo.</p>
 
 <div class="kart">
@@ -138,7 +138,7 @@ const MAGIC = [0x01, 0x96, 0x8a, 0xbd, 0x62];
 const bekle = ms => new Promise(r => setTimeout(r, ms));
 async function yaz(ch, bayt) { const v = new Uint8Array(bayt); if (ch.writeValueWithResponse) return ch.writeValueWithResponse(v); return ch.writeValue(v); }
 
-async function calis() {
+async function calis(hazirCihaz) {
   const ayar = Object.fromEntries(A.map(k => [k, ($(k).value || '').trim()]));
   ayar.url = adresTemizle(ayar.url);
   if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(ayar.url)) { $('ayarKutusu').open = true; return log('Adres hatalı: https://script.google.com/macros/s/.../exec biçiminde olmalı.', true); }
@@ -148,9 +148,7 @@ async function calis() {
   $('al').disabled = true;
   let cihaz;
   try {
-    durum('Tartı aranıyor… listeden MIBFS seç.');
-    adim = 'cihaz secimi';
-    cihaz = await navigator.bluetooth.requestDevice({ filters: [{ name: 'MIBFS' }], optionalServices: [S_BODY, S_WEIGHT, S_CFG] });
+    cihaz = (hazirCihaz && hazirCihaz.gatt) ? hazirCihaz : await tartiCihazi();
     durum('Bağlanılıyor…');
     adim = 'baglanti';
     const gatt = await cihaz.gatt.connect();
@@ -238,7 +236,7 @@ function goster(k) {
     `<div><div class="deger">${v === undefined || v === '' ? '–' : String(v).replace('.', ',')}<small> ${b}</small></div><div class="etiket">${a}</div></div>`).join('');
 }
 
-$('al').onclick = calis;
+$('al').onclick = () => calis();
 
 // ---------- Canli dinleme: baglanmadan yayini (Service Data 0x181B) yakala ----------
 function ayarlariAl() {
@@ -255,16 +253,65 @@ async function yukle(ayar, kayitlar) {
 }
 
 let tarama = null;
+const destek = {
+  requestDevice: !!(navigator.bluetooth && navigator.bluetooth.requestDevice),
+  getDevices: !!(navigator.bluetooth && navigator.bluetooth.getDevices),
+  requestLEScan: !!(navigator.bluetooth && navigator.bluetooth.requestLEScan),
+  watchAdvertisements: !!(window.BluetoothDevice && window.BluetoothDevice.prototype && window.BluetoothDevice.prototype.watchAdvertisements),
+};
+log('Sürüm 5 · destek: ' + Object.entries(destek).map(([k, v]) => k + (v ? '✓' : '✗')).join(' '));
+
+async function tartiCihazi() {
+  // Daha once secildiyse listeyi acmadan kullan
+  if (destek.getDevices) {
+    try { const l = await navigator.bluetooth.getDevices(); const d = l.find(x => (x.name || '') === 'MIBFS'); if (d) { log('Kayıtlı tartı bulundu, liste açılmadı.'); return d; } }
+    catch (e) { log('getDevices: ' + hataMetni(e)); }
+  }
+  durum('Listede MIBFS belirdiği an dokun (tartının üzerinde dur).');
+  adim = 'cihaz secimi';
+  return navigator.bluetooth.requestDevice({ filters: [{ name: 'MIBFS' }], optionalServices: [S_BODY, S_WEIGHT, S_CFG] });
+}
+
 async function dinle() {
   const ayar = ayarlariAl(); if (!ayar) return;
   if (!navigator.bluetooth) return log('Bu tarayıcıda Bluetooth yok. Sayfayı Bluefy ile aç.', true);
   if (tarama) { try { tarama.stop(); } catch (e) {} tarama = null; $('dinle').textContent = 'Canlı dinle (önerilen)'; durum('Dinleme durduruldu.'); return; }
-  if (!navigator.bluetooth.requestLEScan) return log('Bu tarayıcı yayın dinlemeyi (requestLEScan) desteklemiyor.', true);
+  if (!destek.requestLEScan) {
+    // Yol 2: cihazi bir kez sec, sonra o cihazin yayinlarini izle; o da yoksa baglanip hafizayi oku
+    try {
+      const cihaz = await tartiCihazi();
+      log('Seçildi: ' + (cihaz.name || '?'));
+      if (cihaz.watchAdvertisements) {
+        adim = 'yayin izleme';
+        cihaz.addEventListener('advertisementreceived', reklamIsle);
+        await cihaz.watchAdvertisements();
+        tarama = { stop() { try { cihaz.unwatchAdvertisements && cihaz.unwatchAdvertisements(); } catch (e) {} } };
+        $('dinle').textContent = 'Dinlemeyi durdur';
+        durum('Dinleniyor… tartıya çık (çıplak ayak).');
+        log('Cihaz yayınları izleniyor.');
+      } else {
+        log('Yayın izleme yok, bağlanıp hafıza okunacak.');
+        await calis(cihaz);
+      }
+    } catch (e) { log('Hata [' + adim + ']: ' + hataMetni(e), true); }
+    return;
+  }
   adim = 'tarama baslatma';
-  const gonderilen = new Set();
-  let sonHam = '';
-  navigator.bluetooth.addEventListener('advertisementreceived', async ev => {
+  navigator.bluetooth.addEventListener('advertisementreceived', reklamIsle);
+  try {
+    try { tarama = await navigator.bluetooth.requestLEScan({ filters: [{ name: 'MIBFS' }], keepRepeatedDevices: true }); }
+    catch (e1) { log('İsim filtresiyle tarama açılamadı (' + hataMetni(e1) + '), tüm yayınlar deneniyor.'); tarama = await navigator.bluetooth.requestLEScan({ acceptAllAdvertisements: true, keepRepeatedDevices: true }); }
+    $('dinle').textContent = 'Dinlemeyi durdur';
+    durum('Dinleniyor… şimdi tartıya çık (çıplak ayak).');
+    log('Tarama açık.');
+  } catch (e) { tarama = null; log('Hata [' + adim + ']: ' + hataMetni(e), true); }
+}
+
+const gonderilen = new Set();
+let sonHam = '';
+async function reklamIsle(ev) {
     if (!tarama) return;
+    const ayar = ayarlariAl(); if (!ayar) return;
     let dv = null;
     ev.serviceData && ev.serviceData.forEach((v, k) => { if (String(k).toLowerCase().indexOf('181b') >= 0) dv = v; });
     if (!dv) return;
@@ -293,14 +340,6 @@ async function dinle() {
       log('Buluta yazıldı: ' + y.eklenen + ' yeni');
       durum('Tamam: ' + String(o.kilo_kg).replace('.', ',') + ' kg buluta gitti.' + (o.empedans_ohm ? '' : ' (empedans yok: çıplak ayakla tartıl)'));
     } catch (e) { gonderilen.delete(anahtar); log('Hata [' + adim + ']: ' + hataMetni(e), true); }
-  });
-  try {
-    try { tarama = await navigator.bluetooth.requestLEScan({ filters: [{ name: 'MIBFS' }], keepRepeatedDevices: true }); }
-    catch (e1) { log('İsim filtresiyle tarama açılamadı (' + hataMetni(e1) + '), tüm yayınlar deneniyor.'); tarama = await navigator.bluetooth.requestLEScan({ acceptAllAdvertisements: true, keepRepeatedDevices: true }); }
-    $('dinle').textContent = 'Dinlemeyi durdur';
-    durum('Dinleniyor… şimdi tartıya çık (çıplak ayak).');
-    log('Sürüm 4 · tarama açık.');
-  } catch (e) { tarama = null; log('Hata [' + adim + ']: ' + hataMetni(e), true); }
 }
 $('dinle').onclick = dinle;
 </script>
