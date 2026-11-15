@@ -26,7 +26,7 @@
 </style>
 </head>
 <body>
-<h1>Tartı Köprüsü <small style="font-size:13px;color:var(--soluk)">sürüm 7</small></h1>
+<h1>Tartı Köprüsü <small style="font-size:13px;color:var(--soluk)">sürüm 8</small></h1>
 <p class="alt">Mi Body Composition Scale 2 → Google E-Tablo.</p>
 
 <div class="kart">
@@ -143,7 +143,7 @@ async function calis(hazirCihaz) {
   const ayar = Object.fromEntries(A.map(k => [k, ($(k).value || '').trim()]));
   ayar.url = adresTemizle(ayar.url);
   if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(ayar.url)) { $('ayarKutusu').open = true; return log('Adres hatalı: https://script.google.com/macros/s/.../exec biçiminde olmalı.', true); }
-  log('Sürüm 3 · adres tamam.');
+  log('Adres tamam.');
   if (!ayar.url || !ayar.token || !ayar.boy || !ayar.dogum) { $('ayarKutusu').open = true; return log('Önce ayarları doldurup kaydet.', true); }
   if (!navigator.bluetooth) return log('Bu tarayıcıda Bluetooth yok. Sayfayı Bluefy ile aç.', true);
   $('al').disabled = true;
@@ -170,13 +170,25 @@ async function calis(hazirCihaz) {
     adim = 'gecmis karakteristigi';
     const hist = await svc.getCharacteristic(C_HIST);
     log('Geçmiş karakteristiği bulundu.');
-    const cerceveler = []; let bitti = false;
+    const cerceveler = []; let bitti = false, canliTamam = false;
     hist.addEventListener('characteristicvaluechanged', ev => {
       const d = new Uint8Array(ev.target.value.buffer.slice(0));
       log('<- ' + hex(d));
       if (d.length === 1 && d[0] === 0x03) { bitti = true; return; }
-      if (d.length >= 6 && d[0] === 0x01) { log('Kayıt sayısı bildirimi: ' + (d.length >= 7 ? (d[1] | d[2] << 8) : d[1])); return; }
-      if (d.length % 13 === 0) { for (let i = 0; i < d.length; i += 13) cerceveler.push(d.slice(i, i + 13)); return; }
+      if (d.length >= 6 && d[0] === 0x01) {
+        const genis = d.length >= 7, adet = genis ? (d[1] | d[2] << 8) : d[1], i0 = genis ? 3 : 2, isaret = (d[i0] << 8) | d[i0 + 1];
+        log(isaret === 0xffff || isaret === 0 ? 'Hafızadaki kayıt sayısı: ' + adet : 'Kontrol yanıtı (yankı), veri değil.');
+        return;
+      }
+      if (d.length % 13 === 0) {
+        for (let i = 0; i < d.length; i += 13) {
+          const c = d.slice(i, i + 13); cerceveler.push(c);
+          const o = coz13(c);
+          durum('Tartı: ' + String(o.kilo_kg).replace('.', ',') + ' kg' + (o.empedans_ohm ? ' · ' + o.empedans_ohm + ' Ω' : '') + (o.sabit ? ' · sabit' : ' · ölçülüyor'));
+          if (o.sabit && o.empedans_ohm) canliTamam = true;
+        }
+        return;
+      }
       log('Bilinmeyen uzunluk ' + d.length + ' (ham kaydedildi)');
       cerceveler.push(d);
     });
@@ -188,9 +200,12 @@ async function calis(hazirCihaz) {
     await yaz(hist, [0x02]);
     log('Komutlar gönderildi.');
     adim = 'veri bekleme';
-    durum('Ölçümler okunuyor…');
-    for (let i = 0; i < 40 && !bitti; i++) await bekle(500);
-    log(bitti ? 'Aktarım bitti.' : 'Bitiş sinyali gelmedi, gelenlerle devam.');
+    durum('Bağlı. Şimdi tartıya çık (çıplak ayak), ölçüm bitene kadar kal. (60 sn)');
+    // Hafiza bossa tarti bagliyken canli olcumu ayni kanaldan gonderir: 60 sn bekle,
+    // sabit+empedansli canli cerceve gelince 2 sn daha bekleyip bitir.
+    for (let i = 0; i < 120 && !bitti && !canliTamam; i++) await bekle(500);
+    if (canliTamam) { await bekle(2000); log('Canlı ölçüm alındı.'); }
+    else log(bitti ? 'Aktarım bitti.' : 'Süre doldu, gelenlerle devam.');
 
     // 3) Coz + hesapla
     const erkek = ayar.cins === '1', boy = parseFloat(ayar.boy);
@@ -198,11 +213,15 @@ async function calis(hazirCihaz) {
     for (const d of cerceveler) {
       if (d.length !== 13) { kayitlar.push({ anahtar: 'ham:' + hex(d), ham_hex: hex(d), kaynak: 'MIBFS-bilinmeyen' }); continue; }
       const o = coz13(d);
-      if (!o.sabit || o.indi) continue;
+      if (!o.sabit || (o.indi && !o.empedans_ohm)) continue;
+      if (!o.empedans_ohm && cerceveler.some(x => x.length === 13 && coz13(x).empedans_ohm)) continue; // ara (empedanssiz) cerceveyi atla
       const yil = parseInt(o.tarti_zamani.slice(0, 4), 10);
       const yas = (yil > 2000 ? yil : new Date().getFullYear()) - parseInt(ayar.dogum, 10);
       const v = o.empedans_ohm ? vucut(erkek, yas, boy, o.kilo_kg, o.empedans_ohm) : {};
-      kayitlar.push({ anahtar: o.ham_hex, tarti_zamani: o.tarti_zamani, kilo_kg: o.kilo_kg, empedans_ohm: o.empedans_ohm ?? '',
+      // Ayni olcum "sabit" ve "indi" bayraklariyla iki paket gelir: anahtar zaman+kilo+empedans
+      const anahtar = o.tarti_zamani.slice(0, 16) + '|' + o.kilo_kg + '|' + (o.empedans_ohm || '');
+      if (kayitlar.some(k => k.anahtar === anahtar)) continue;
+      kayitlar.push({ anahtar, tarti_zamani: o.tarti_zamani, kilo_kg: o.kilo_kg, empedans_ohm: o.empedans_ohm ?? '',
                       ...v, ham_hex: o.ham_hex, kaynak: 'MIBFS-gecmis/Bluefy' });
     }
     log(kayitlar.length + ' ölçüm bulundu.');
@@ -260,7 +279,7 @@ const destek = {
   requestLEScan: !!(navigator.bluetooth && navigator.bluetooth.requestLEScan),
   watchAdvertisements: !!(window.BluetoothDevice && window.BluetoothDevice.prototype && window.BluetoothDevice.prototype.watchAdvertisements),
 };
-log('Sürüm 7 · destek: ' + Object.entries(destek).map(([k, v]) => k + (v ? '✓' : '✗')).join(' '));
+log('Sürüm 8 · destek: ' + Object.entries(destek).map(([k, v]) => k + (v ? '✓' : '✗')).join(' '));
 
 // Daha once secilen tarti sayfa acilirken arka planda aranir. requestDevice'tan ONCE await olmamali:
 // iOS dokunma iznini dusurur ve Bluefy listeyi acmadan reddeder (hata "2").
